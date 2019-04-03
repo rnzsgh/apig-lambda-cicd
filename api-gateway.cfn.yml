@@ -1,0 +1,241 @@
+---
+
+# Any code, applications, scripts, templates, proofs of concept,
+# documentation and other items are provided for illustration purposes only.
+
+AWSTemplateFormatVersion: 2010-09-09
+
+
+Parameters:
+
+  CertificateArn:
+    Type: String
+    Description: The SSL/TLS certificate ARN
+    MinLength: 0
+    MaxLength: 2048
+    Default: ""
+
+  DomainName:
+    Type: String
+    Description: Domain name for the API Gateway
+    Default: ""
+    AllowedPattern: "(^$|^((?!-)[A-Za-z0-9-]{1,63}(?<!-)\\.)+[A-Za-z]{2,6}$)" # Allow for a blank or a domain name
+    ConstraintDescription: Please enter a valid domain name
+
+  HostedZoneName:
+    Type: String
+    Description: The Amazon Route 53 Hosted Zone Name for the optional load balancer alias record - do not include a period at the end
+    Default: ""
+    AllowedPattern: "(^$|^((?!-)[A-Za-z0-9-]{1,63}(?<!-)\\.)+[A-Za-z]{2,6}$)" # Allow for a blank or a domain name
+    ConstraintDescription: Please enter a valid Route 53 Hosted Zone Name
+
+
+Conditions:
+
+  IsCustomHostnameTlsEnabled: !And
+    - !Not [ !Equals [ !Ref CertificateArn, "" ] ]
+    - !Not [ !Equals [ !Ref DomainName, "" ] ]
+
+  CreateRoute53Record: !And
+    - !Not [ !Equals [ !Ref DomainName, "" ] ]
+    - !Not [ !Equals [ !Ref HostedZoneName, "" ] ]
+
+
+Resources:
+
+  ApiGatewayProdLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /apig/${AWS::StackName}-prod
+
+  ApiGatewayDevLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /apig/${AWS::StackName}-dev
+
+  ApiAccountRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  ApiAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiAccountRole.Arn
+
+  ApiCertificate:
+    Type: AWS::ApiGateway::ClientCertificate
+
+  ApiDomainName:
+    Type: AWS::ApiGateway::DomainName
+    Condition: IsCustomHostnameTlsEnabled
+    Properties:
+      CertificateArn: !Ref CertificateArn
+      DomainName: !Ref DomainName
+      EndpointConfiguration:
+        Types:
+          - EDGE
+
+  Api:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Ref AWS::StackName
+      EndpointConfiguration:
+        Types:
+          - EDGE
+    DependsOn: ApiAccount
+
+  ApiProdDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref Api
+      StageName: p
+      StageDescription:
+        AccessLogSetting:
+          DestinationArn: !GetAtt ApiGatewayProdLogGroup.Arn
+        MetricsEnabled: true
+        LoggingLevel: ERROR
+    DependsOn: ApiHealthMethod
+
+  ApiDevDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref Api
+      StageName: d
+      StageDescription:
+        AccessLogSetting:
+          DestinationArn: !GetAtt ApiGatewayDevLogGroup.Arn
+        MetricsEnabled: true
+        LoggingLevel: ERROR
+    DependsOn: ApiHealthMethod
+
+  ApiHealthResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      PathPart: health
+      RestApiId: !Ref Api
+      ParentId:
+        !GetAtt Api.RootResourceId
+
+  ApiHealthMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref ApiHealthResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: GET
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${arn}/invocations
+          - arn: !GetAtt HealthLambdaFunction.Arn
+
+  HealthLambdaApiGatewayInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt HealthLambdaFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/GET/
+
+  HealthLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          def handler(event,context):
+            return {
+              'body': 'ok',
+              'headers': { 'Content-Type': 'text/plain' },
+              'statusCode': 200
+            }
+      Description: !Sub ${AWS::StackName} Health Check
+      FunctionName: !Sub ${AWS::StackName}-health-check
+      Handler: index.handler
+      MemorySize: 128
+      Role: !GetAtt HealthLambdaFunctionIamRole.Arn
+      Runtime: python3.7
+      Timeout: 60
+
+  HealthLambdaFunctionIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: lambda
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+
+  Route53Record:
+    Type: AWS::Route53::RecordSet
+    Condition: CreateRoute53Record
+    Properties:
+      HostedZoneName: !Sub ${HostedZoneName}.
+      Name: !Sub ${DomainName}.
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ApiDomainName.DistributionDomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+
+
+Outputs:
+
+  ApiId:
+    Value: !Ref Api
+    Export:
+      Name: !Sub ${AWS::StackName}-api-gateway-id
+
+  ApiRootResourceId:
+    Value: !GetAtt Api.RootResourceId
+    Export:
+      Name: !Sub ${AWS::StackName}-api-gateway-root-resource-id
+
+  ApiProdDeploymentId:
+    Value: !Ref ApiProdDeployment
+    Export:
+      Name: !Sub ${AWS::StackName}-api-gateway-prod-deployment-id
+
+  ApiDevDeploymentId:
+    Value: !Ref ApiDevDeployment
+    Export:
+      Name: !Sub ${AWS::StackName}-api-gateway-dev-deployment-id
+
+  HealthLambdaFunctionArn:
+    Value: !GetAtt HealthLambdaFunction.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-api-gateway-health-lambda-arn
+
+  ApiDevInvokeUrl:
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/d
+    Export:
+      Name: !Sub ${AWS::StackName}-api-gateway-url-dev
+
+  ApiProdInvokeUrl:
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/p
+    Export:
+      Name: !Sub ${AWS::StackName}-api-gateway-url-prod
+
+
