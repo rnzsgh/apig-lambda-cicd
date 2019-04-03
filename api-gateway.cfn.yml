@@ -89,6 +89,7 @@ Resources:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: !Ref AWS::StackName
+      FailOnWarnings: true
       EndpointConfiguration:
         Types:
           - EDGE
@@ -104,7 +105,7 @@ Resources:
           DestinationArn: !GetAtt ApiGatewayProdLogGroup.Arn
         MetricsEnabled: true
         LoggingLevel: ERROR
-    DependsOn: ApiHealthMethod
+    DependsOn: ApiHealthCheckMethod
 
   ApiDevDeployment:
     Type: AWS::ApiGateway::Deployment
@@ -116,9 +117,9 @@ Resources:
           DestinationArn: !GetAtt ApiGatewayDevLogGroup.Arn
         MetricsEnabled: true
         LoggingLevel: ERROR
-    DependsOn: ApiHealthMethod
+    DependsOn: ApiHealthCheckMethod
 
-  ApiHealthResource:
+  ApiHealthCheckResource:
     Type: AWS::ApiGateway::Resource
     Properties:
       PathPart: health
@@ -126,11 +127,11 @@ Resources:
       ParentId:
         !GetAtt Api.RootResourceId
 
-  ApiHealthMethod:
+  ApiHealthCheckMethod:
     Type: AWS::ApiGateway::Method
     Properties:
       RestApiId: !Ref Api
-      ResourceId: !Ref ApiHealthResource
+      ResourceId: !Ref ApiHealthCheckResource
       HttpMethod: GET
       AuthorizationType: NONE
       Integration:
@@ -138,17 +139,17 @@ Resources:
         IntegrationHttpMethod: GET
         Uri: !Sub
           - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${arn}/invocations
-          - arn: !GetAtt HealthLambdaFunction.Arn
+          - arn: !GetAtt HealthCheckLambda.Arn
 
-  HealthLambdaApiGatewayInvoke:
+  HealthCheckLambdaApiGatewayInvoke:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
-      FunctionName: !GetAtt HealthLambdaFunction.Arn
+      FunctionName: !GetAtt HealthCheckLambda.Arn
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/GET/
 
-  HealthLambdaFunction:
+  HealthCheckLambda:
     Type: AWS::Lambda::Function
     Properties:
       Code:
@@ -159,15 +160,21 @@ Resources:
               'headers': { 'Content-Type': 'text/plain' },
               'statusCode': 200
             }
-      Description: !Sub ${AWS::StackName} Health Check
+      Description: !Sub ${AWS::StackName} HealthCheck Check
       FunctionName: !Sub ${AWS::StackName}-health-check
       Handler: index.handler
       MemorySize: 128
-      Role: !GetAtt HealthLambdaFunctionIamRole.Arn
+      Role: !GetAtt HealthCheckLambdaIamRole.Arn
       Runtime: python3.7
       Timeout: 60
 
-  HealthLambdaFunctionIamRole:
+  HealthCheckLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${HealthCheckLambda}
+      RetentionInDays: 90
+
+  HealthCheckLambdaIamRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -187,7 +194,7 @@ Resources:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: arn:aws:logs:*:*:*
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-health-check:*
 
   Route53Record:
     Type: AWS::Route53::RecordSet
@@ -223,19 +230,33 @@ Outputs:
     Export:
       Name: !Sub ${AWS::StackName}-api-gateway-dev-deployment-id
 
-  HealthLambdaFunctionArn:
-    Value: !GetAtt HealthLambdaFunction.Arn
+  HealthCheckLambdaName:
+    Value: !Sub ${AWS::StackName}-lambda-health-check
     Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-health-lambda-arn
+      Name: !Sub ${AWS::StackName}-lambda-health-check-name
+
+  HealthCheckLambdaArn:
+    Value: !GetAtt HealthCheckLambda.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-api-gateway-health-check-lambda-arn
+
+  ApiDevInvokeBareUrl:
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/d
+    Export:
+      Name: !Sub ${AWS::StackName}-api-gateway-bare-url-dev
+
+  ApiProdInvokeBareUrl:
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/p
+    Export:
+      Name: !Sub ${AWS::StackName}-api-gateway-bare-url-prod
 
   ApiDevInvokeUrl:
-    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/d
+    Value: !Sub https://${DomainName}/d
     Export:
       Name: !Sub ${AWS::StackName}-api-gateway-url-dev
 
   ApiProdInvokeUrl:
-    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/p
+    Value: !Sub https://${DomainName}/p
     Export:
       Name: !Sub ${AWS::StackName}-api-gateway-url-prod
-
 
