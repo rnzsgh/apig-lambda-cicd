@@ -88,7 +88,7 @@ Resources:
   Api:
     Type: AWS::ApiGateway::RestApi
     Properties:
-      Name: !Sub ${AWS::StackName}-apig
+      Name: !Sub ${AWS::StackName}
       FailOnWarnings: true
       EndpointConfiguration:
         Types:
@@ -99,7 +99,6 @@ Resources:
     Type: AWS::ApiGateway::Deployment
     Properties:
       RestApiId: !Ref Api
-      StageName: PlaceholderStage
     DependsOn: ApiHealthCheckMethod
 
   ApiProdStage:
@@ -115,6 +114,7 @@ Resources:
       MethodSettings:
         - HttpMethod: '*'
           DataTraceEnabled: true
+          MetricsEnabled: true
           LoggingLevel: INFO
           ResourcePath: /*
       Variables:
@@ -134,6 +134,7 @@ Resources:
       MethodSettings:
         - HttpMethod: '*'
           DataTraceEnabled: true
+          MetricsEnabled: true
           LoggingLevel: INFO
           ResourcePath: /*
       Variables:
@@ -158,7 +159,7 @@ Resources:
       MethodResponses:
         - StatusCode: 200
       Integration:
-        Type: AWS
+        Type: AWS_PROXY
         IntegrationHttpMethod: POST
         IntegrationResponses:
           - StatusCode: 200
@@ -173,7 +174,7 @@ Resources:
       Action: lambda:InvokeFunction
       FunctionName: !Ref HealthCheckLambdaDevAlias
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-apig/*
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/d/GET/health
 
   HealthCheckLambdaProdPermission:
     Type: AWS::Lambda::Permission
@@ -181,7 +182,7 @@ Resources:
       Action: lambda:InvokeFunction
       FunctionName: !Ref HealthCheckLambdaProdAlias
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-apig/*
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/p/GET/health
 
   HealthCheckLambdaPermission:
     Type: AWS::Lambda::Permission
@@ -189,7 +190,7 @@ Resources:
       Action: lambda:InvokeFunction
       FunctionName: !Ref HealthCheckLambda
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-apig/*
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/GET/health
 
   HealthCheckLambda:
     Type: AWS::Lambda::Function
@@ -206,7 +207,7 @@ Resources:
       FunctionName: !Sub ${AWS::StackName}-health-check
       Handler: index.handler
       MemorySize: 128
-      Role: !GetAtt HealthCheckLambdaIamRole.Arn
+      Role: !GetAtt HealthCheckLambdaExecutionIamRole.Arn
       Runtime: python3.7
       Timeout: 60
 
@@ -230,7 +231,7 @@ Resources:
       LogGroupName: !Sub /aws/lambda/${AWS::StackName}-health-check
       RetentionInDays: 90
 
-  HealthCheckLambdaIamRole:
+  HealthCheckLambdaExecutionIamRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
