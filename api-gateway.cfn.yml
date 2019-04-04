@@ -53,7 +53,7 @@ Resources:
     Properties:
       LogGroupName: !Sub /apig/${AWS::StackName}-dev
 
-  ApiAccountRole:
+  ApiCloudWatchAccountRole:
     Type: AWS::IAM::Role
     Properties:
       Path: /
@@ -70,7 +70,7 @@ Resources:
   ApiAccount:
     Type: AWS::ApiGateway::Account
     Properties:
-      CloudWatchRoleArn: !GetAtt ApiAccountRole.Arn
+      CloudWatchRoleArn: !GetAtt ApiCloudWatchAccountRole.Arn
 
   ApiCertificate:
     Type: AWS::ApiGateway::ClientCertificate
@@ -88,44 +88,64 @@ Resources:
   Api:
     Type: AWS::ApiGateway::RestApi
     Properties:
-      Name: !Ref AWS::StackName
+      Name: !Sub ${AWS::StackName}-apig
       FailOnWarnings: true
       EndpointConfiguration:
         Types:
           - EDGE
     DependsOn: ApiAccount
 
-  ApiProdDeployment:
+  ApiDeployment:
     Type: AWS::ApiGateway::Deployment
     Properties:
       RestApiId: !Ref Api
-      StageName: p
-      StageDescription:
-        AccessLogSetting:
-          DestinationArn: !GetAtt ApiGatewayProdLogGroup.Arn
-        MetricsEnabled: true
-        LoggingLevel: ERROR
+      StageName: PlaceholderStage
     DependsOn: ApiHealthCheckMethod
 
-  ApiDevDeployment:
-    Type: AWS::ApiGateway::Deployment
+  ApiProdStage:
+    Type: AWS::ApiGateway::Stage
     Properties:
+      ClientCertificateId: !Ref ApiCertificate
+      DeploymentId: !Ref ApiDeployment
+      RestApiId: !Ref Api
+      StageName: p
+      TracingEnabled: false # TODO: Enable this
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiGatewayProdLogGroup.Arn
+      MethodSettings:
+        - HttpMethod: '*'
+          DataTraceEnabled: true
+          LoggingLevel: INFO
+          ResourcePath: /*
+      Variables:
+        LambdaAlias: PROD
+    DependsOn: ApiAccount
+
+  ApiDevStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      ClientCertificateId: !Ref ApiCertificate
+      DeploymentId: !Ref ApiDeployment
       RestApiId: !Ref Api
       StageName: d
-      StageDescription:
-        AccessLogSetting:
-          DestinationArn: !GetAtt ApiGatewayDevLogGroup.Arn
-        MetricsEnabled: true
-        LoggingLevel: ERROR
-    DependsOn: ApiHealthCheckMethod
+      TracingEnabled: false # TODO: Enable this
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiGatewayDevLogGroup.Arn
+      MethodSettings:
+        - HttpMethod: '*'
+          DataTraceEnabled: true
+          LoggingLevel: INFO
+          ResourcePath: /*
+      Variables:
+        LambdaAlias: DEV
+    DependsOn: ApiAccount
 
   ApiHealthCheckResource:
     Type: AWS::ApiGateway::Resource
     Properties:
       PathPart: health
       RestApiId: !Ref Api
-      ParentId:
-        !GetAtt Api.RootResourceId
+      ParentId: !GetAtt Api.RootResourceId
 
   ApiHealthCheckMethod:
     Type: AWS::ApiGateway::Method
@@ -134,20 +154,42 @@ Resources:
       ResourceId: !Ref ApiHealthCheckResource
       HttpMethod: GET
       AuthorizationType: NONE
+      OperationName: GetHealthCheck
+      MethodResponses:
+        - StatusCode: 200
       Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: GET
+        Type: AWS
+        IntegrationHttpMethod: POST
+        IntegrationResponses:
+          - StatusCode: 200
         Uri: !Sub
-          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${arn}/invocations
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${arn}:${!stageVariables.LambdaAlias}/invocations
           - arn: !GetAtt HealthCheckLambda.Arn
+    DependsOn: HealthCheckLambdaPermission
 
-  HealthCheckLambdaApiGatewayInvoke:
+  HealthCheckLambdaDevPermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
-      FunctionName: !GetAtt HealthCheckLambda.Arn
+      FunctionName: !Ref HealthCheckLambdaDevAlias
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/GET/
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-apig/*
+
+  HealthCheckLambdaProdPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref HealthCheckLambdaProdAlias
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-apig/*
+
+  HealthCheckLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref HealthCheckLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-apig/*
 
   HealthCheckLambda:
     Type: AWS::Lambda::Function
@@ -168,10 +210,24 @@ Resources:
       Runtime: python3.7
       Timeout: 60
 
+  HealthCheckLambdaDevAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref HealthCheckLambda
+      FunctionVersion: $LATEST
+      Name: DEV
+
+  HealthCheckLambdaProdAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref HealthCheckLambda
+      FunctionVersion: $LATEST
+      Name: PROD
+
   HealthCheckLambdaLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${HealthCheckLambda}
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-health-check
       RetentionInDays: 90
 
   HealthCheckLambdaIamRole:
@@ -184,17 +240,8 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
-      Policies:
-        - PolicyName: lambda
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-health-check:*
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
   Route53Record:
     Type: AWS::Route53::RecordSet
@@ -205,7 +252,7 @@ Resources:
       Type: A
       AliasTarget:
         DNSName: !GetAtt ApiDomainName.DistributionDomainName
-        HostedZoneId: Z2FDTNDATAQYW2
+        HostedZoneId: Z2FDTNDATAQYW2 # Edge deployment api gateway - https://docs.aws.amazon.com/general/latest/gr/rande.html
 
 
 Outputs:
@@ -220,15 +267,10 @@ Outputs:
     Export:
       Name: !Sub ${AWS::StackName}-api-gateway-root-resource-id
 
-  ApiProdDeploymentId:
-    Value: !Ref ApiProdDeployment
+  ApiDeploymentId:
+    Value: !Ref ApiDeployment
     Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-prod-deployment-id
-
-  ApiDevDeploymentId:
-    Value: !Ref ApiDevDeployment
-    Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-dev-deployment-id
+      Name: !Sub ${AWS::StackName}-api-gateway-deployment-id
 
   HealthCheckLambdaName:
     Value: !Sub ${AWS::StackName}-lambda-health-check
