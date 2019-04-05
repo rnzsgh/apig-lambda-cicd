@@ -99,7 +99,7 @@ Resources:
     Type: AWS::ApiGateway::Deployment
     Properties:
       RestApiId: !Ref Api
-    DependsOn: ApiHealthCheckMethod
+    DependsOn: ApiPingMethod
 
   ApiProdStage:
     Type: AWS::ApiGateway::Stage
@@ -141,21 +141,21 @@ Resources:
         LambdaAlias: DEV
     DependsOn: ApiAccount
 
-  ApiHealthCheckResource:
+  ApiPingResource:
     Type: AWS::ApiGateway::Resource
     Properties:
-      PathPart: health
+      PathPart: ping
       RestApiId: !Ref Api
       ParentId: !GetAtt Api.RootResourceId
 
-  ApiHealthCheckMethod:
+  ApiPingMethod:
     Type: AWS::ApiGateway::Method
     Properties:
       RestApiId: !Ref Api
-      ResourceId: !Ref ApiHealthCheckResource
+      ResourceId: !Ref ApiPingResource
       HttpMethod: GET
       AuthorizationType: NONE
-      OperationName: GetHealthCheck
+      OperationName: GetPing
       MethodResponses:
         - StatusCode: 200
       Integration:
@@ -165,34 +165,31 @@ Resources:
           - StatusCode: 200
         Uri: !Sub
           - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${arn}:${!stageVariables.LambdaAlias}/invocations
-          - arn: !GetAtt HealthCheckLambda.Arn
-    DependsOn: HealthCheckLambdaPermission
+          - arn: !GetAtt PingLambda.Arn
 
-  HealthCheckLambdaDevPermission:
+  PingLambdaDevPermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
-      FunctionName: !Ref HealthCheckLambdaDevAlias
+      FunctionName: !Ref PingLambdaDevAlias
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/d/GET/health
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/ping
+    DependsOn:
+      - ApiPingMethod
+      - ApiDevStage
 
-  HealthCheckLambdaProdPermission:
+  PingLambdaProdPermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
-      FunctionName: !Ref HealthCheckLambdaProdAlias
+      FunctionName: !Ref PingLambdaProdAlias
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/p/GET/health
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/ping
+    DependsOn:
+      - ApiPingMethod
+      - ApiProdStage
 
-  HealthCheckLambdaPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Ref HealthCheckLambda
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/GET/health
-
-  HealthCheckLambda:
+  PingLambda:
     Type: AWS::Lambda::Function
     Properties:
       Code:
@@ -203,35 +200,35 @@ Resources:
               'headers': { 'Content-Type': 'text/plain' },
               'statusCode': 200
             }
-      Description: !Sub ${AWS::StackName} HealthCheck Check
-      FunctionName: !Sub ${AWS::StackName}-health-check
+      Description: !Sub ${AWS::StackName} Ping Check
+      FunctionName: !Sub ${AWS::StackName}-ping
       Handler: index.handler
       MemorySize: 128
-      Role: !GetAtt HealthCheckLambdaExecutionIamRole.Arn
+      Role: !GetAtt PingLambdaExecutionIamRole.Arn
       Runtime: python3.7
       Timeout: 60
 
-  HealthCheckLambdaDevAlias:
+  PingLambdaDevAlias:
     Type: AWS::Lambda::Alias
     Properties:
-      FunctionName: !Ref HealthCheckLambda
+      FunctionName: !Ref PingLambda
       FunctionVersion: $LATEST
       Name: DEV
 
-  HealthCheckLambdaProdAlias:
+  PingLambdaProdAlias:
     Type: AWS::Lambda::Alias
     Properties:
-      FunctionName: !Ref HealthCheckLambda
+      FunctionName: !Ref PingLambda
       FunctionVersion: $LATEST
       Name: PROD
 
-  HealthCheckLambdaLogGroup:
+  PingLambdaLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-health-check
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-ping
       RetentionInDays: 90
 
-  HealthCheckLambdaExecutionIamRole:
+  PingLambdaExecutionIamRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -273,15 +270,15 @@ Outputs:
     Export:
       Name: !Sub ${AWS::StackName}-api-gateway-deployment-id
 
-  HealthCheckLambdaName:
-    Value: !Sub ${AWS::StackName}-lambda-health-check
+  PingLambdaName:
+    Value: !Sub ${AWS::StackName}-lambda-ping
     Export:
-      Name: !Sub ${AWS::StackName}-lambda-health-check-name
+      Name: !Sub ${AWS::StackName}-lambda-ping-name
 
-  HealthCheckLambdaArn:
-    Value: !GetAtt HealthCheckLambda.Arn
+  PingLambdaArn:
+    Value: !GetAtt PingLambda.Arn
     Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-health-check-lambda-arn
+      Name: !Sub ${AWS::StackName}-api-gateway-ping-lambda-arn
 
   ApiDevInvokeBareUrl:
     Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/d
