@@ -8,6 +8,7 @@ AWSTemplateFormatVersion: 2010-09-09
 
 Parameters:
 
+  # For EDGE deployments, this cert must be in us-east-1
   CertificateArn:
     Type: String
     Description: The SSL/TLS certificate ARN
@@ -29,6 +30,15 @@ Parameters:
     AllowedPattern: "(^$|^((?!-)[A-Za-z0-9-]{1,63}(?<!-)\\.)+[A-Za-z]{2,6}$)" # Allow for a blank or a domain name
     ConstraintDescription: Please enter a valid Route 53 Hosted Zone Name
 
+  EndpointType:
+    Type: String
+    Description: Environment name - EDGE or REGIONAL
+    Default: EDGE
+    AllowedValues:
+      - EDGE
+      - REGIONAL
+    ConstraintDescription: Specify either EDGE or REGIONAL
+
 
 Conditions:
 
@@ -40,6 +50,56 @@ Conditions:
     - !Not [ !Equals [ !Ref DomainName, "" ] ]
     - !Not [ !Equals [ !Ref HostedZoneName, "" ] ]
 
+  IsEdge : !Equals [ !Ref EndpointType, EDGE ]
+
+  IsRegional: !Equals [ !Ref EndpointType, REGIONAL ]
+
+  CreateRoute53RecordEdge: !And
+    - !Condition CreateRoute53Record
+    - !Condition IsEdge
+
+  CreateRoute53RecordRegional: !And
+    - !Condition CreateRoute53Record
+    - !Condition IsRegional
+
+
+Mappings:
+
+  ApiGatewayHostedZoneIdRegionMap:
+    us-east-2:
+      HostedZoneId: ZOJJZC49E0EPZ
+    us-east-1:
+      HostedZoneId: Z1UJRXOUMOOFQ8
+    us-west-1:
+      HostedZoneId: Z2MUQ32089INYE
+    us-west-2:
+      HostedZoneId: Z2OJLYMUO9EFXC
+    ap-south-1:
+      HostedZoneId: Z3VO1THU9YC4UR
+    ap-northeast-3:
+      HostedZoneId: Z2YQB5RD63NC85
+    ap-northeast-2:
+      HostedZoneId: Z20JF4UZKIW1U8
+    ap-southeast-1:
+      HostedZoneId: ZL327KTPIQFUL
+    ap-southeast-2:
+      HostedZoneId: Z2RPCDW04V8134
+    ap-northeast-1:
+      HostedZoneId: Z1YSHQZHG15GKL
+    ca-central-1:
+      HostedZoneId: Z19DQILCV0OWEC
+    eu-central-1:
+      HostedZoneId: Z1U9ULNL0V5AJ3
+    eu-west-1:
+      HostedZoneId: ZLY8HYME6SFDD
+    eu-west-2:
+      HostedZoneId: ZJ5UAJN8Y3Z2Q
+    eu-west-3:
+      HostedZoneId: Z3KY65QIEKYHQQ
+    eu-north-1:
+      HostedZoneId: Z2YB950C88HT6D
+    sa-east-1:
+      HostedZoneId: ZCMLWB8V5SYIT
 
 Resources:
 
@@ -79,11 +139,18 @@ Resources:
     Type: AWS::ApiGateway::DomainName
     Condition: IsCustomHostnameTlsEnabled
     Properties:
-      CertificateArn: !Ref CertificateArn
+      CertificateArn: !If [ IsEdge, !Ref CertificateArn, !Ref "AWS::NoValue" ]
+      RegionalCertificateArn: !If [ IsRegional, !Ref CertificateArn, !Ref "AWS::NoValue" ]
       DomainName: !Ref DomainName
       EndpointConfiguration:
         Types:
-          - EDGE
+          - !Ref EndpointType
+
+  ApiBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Properties:
+      DomainName: !Ref DomainName
+      RestApiId: !Ref Api
 
   Api:
     Type: AWS::ApiGateway::RestApi
@@ -92,7 +159,7 @@ Resources:
       FailOnWarnings: true
       EndpointConfiguration:
         Types:
-          - EDGE
+          - !Ref EndpointType
     DependsOn: ApiAccount
 
   ApiDeployment:
@@ -241,16 +308,29 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
-  Route53Record:
+  # Edge deployment api gateway - https://docs.aws.amazon.com/general/latest/gr/rande.html
+  Route53RecordEdge:
     Type: AWS::Route53::RecordSet
-    Condition: CreateRoute53Record
+    Condition: CreateRoute53RecordEdge
     Properties:
       HostedZoneName: !Sub ${HostedZoneName}.
       Name: !Sub ${DomainName}.
       Type: A
       AliasTarget:
         DNSName: !GetAtt ApiDomainName.DistributionDomainName
-        HostedZoneId: Z2FDTNDATAQYW2 # Edge deployment api gateway - https://docs.aws.amazon.com/general/latest/gr/rande.html
+        HostedZoneId: Z2FDTNDATAQYW2 # Same for all edge optimized
+
+  # Regional deployment api gateway - https://docs.aws.amazon.com/general/latest/gr/rande.html
+  Route53RecordRegional:
+    Type: AWS::Route53::RecordSet
+    Condition: CreateRoute53RecordRegional
+    Properties:
+      HostedZoneName: !Sub ${HostedZoneName}.
+      Name: !Sub ${DomainName}.
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ApiDomainName.RegionalDomainName
+        HostedZoneId: !FindInMap [ ApiGatewayHostedZoneIdRegionMap, !Ref "AWS::Region", HostedZoneId ]
 
 
 Outputs:
