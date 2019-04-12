@@ -7,6 +7,10 @@ def handler(event, context):
 
     print('This is an example of logging')
 
+    print(event)
+
+    print(context)
+
     return {
         'headers': { 'location': 'https://aws.amazon.com' },
         'statusCode': 302,
