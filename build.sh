@@ -1,7 +1,6 @@
 #!/bin/bash
 
 LAMBDA_BUCKET=$1
-echo $LAMBDA_BUCKET
 
 for d in */ ; do
     d=${d%*/}
