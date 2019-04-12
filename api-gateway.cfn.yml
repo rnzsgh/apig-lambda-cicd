@@ -398,12 +398,16 @@ Resources:
       AuthorizationType: NONE
       OperationName: GetRedirect
       MethodResponses:
-        - StatusCode: 200
+        - StatusCode: 302
+          ResponseParameters:
+            method.response.header.Location: true
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         IntegrationResponses:
-          - StatusCode: 200
+          - StatusCode: 302
+            ResponseParameters:
+              method.request.header.Location:  integration.response.body.location
         Uri: !Sub
           - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${arn}:${!stageVariables.LambdaAlias}/invocations
           - arn: !GetAtt RedirectLambda.Arn
