@@ -1,3 +1,11 @@
+import json
 
 def handler(event, context):
-    return { 'statusCode': 200, 'location': 'https://aws.amazon.com' }
+    return {
+        'isBase64Encoded': False,
+        'headers': {},
+        'statusCode': 200,
+        'body': json.dumps({
+            'location': 'https://aws.amazon.com',
+        }),
+    }
