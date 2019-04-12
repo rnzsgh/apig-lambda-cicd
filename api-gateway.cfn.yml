@@ -131,20 +131,6 @@ Resources:
 
   # CI/CD ######################################################################
 
-  LambdaCodeBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Delete
-    Properties:
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-
   CodePipelineArtifactBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Delete
@@ -407,7 +393,7 @@ Resources:
         IntegrationResponses:
           - StatusCode: 302
             ResponseParameters:
-              method.request.header.Location:  integration.response.body.location
+              method.response.header.Location: integration.response.header.location
         Uri: !Sub
           - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${arn}:${!stageVariables.LambdaAlias}/invocations
           - arn: !GetAtt RedirectLambda.Arn
