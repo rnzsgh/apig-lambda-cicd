@@ -6,10 +6,5 @@ def handler(event, context):
     #print('ip: {} - agent: {}'.format(ip, agent))
 
     return {
-        'isBase64Encoded': False,
-        'headers': {},
-        'statusCode': 302,
-        'body': json.dumps({
-            'location': 'https://aws.amazon.com',
-        }),
+        'headers': { 'location': 'https://aws.amazon.com' },
     }
