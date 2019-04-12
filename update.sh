@@ -6,7 +6,7 @@ aws cloudformation update-stack \
   --stack-name $STACK_NAME \
   --template-body file://api-gateway.cfn.yml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameters
+  --parameters \
   ParameterKey=CertificateArn,ParameterValue=$CERT_ARN \
   ParameterKey=DomainName,ParameterValue=$DOMAIN \
   ParameterKey=EndpointType,ParameterValue=$TYPE \
