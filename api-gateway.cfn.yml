@@ -32,12 +32,37 @@ Parameters:
 
   EndpointType:
     Type: String
-    Description: Environment name - EDGE or REGIONAL
+    Description: Endpoint type - EDGE or REGIONAL
     Default: EDGE
     AllowedValues:
       - EDGE
       - REGIONAL
     ConstraintDescription: Specify either EDGE or REGIONAL
+
+  GitSourceRepo:
+    Type: String
+    Description: GitHub source repository - must contain a Dockerfile in the base for the build
+
+  GitBranch:
+    Type: String
+    Default: master
+    Description: GitHub git repository branch - change triggers a new build
+
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub API token - https://github.com/blog/1509-personal-api-tokens
+
+  GitHubUser:
+    Type: String
+    Description: GitHub username or organization
+
+  CodeBuildDockerImage:
+    Type: String
+    Default: aws/codebuild/python:3.7.1-1.7.0
+
+  LambdaReleaseBucketName:
+    Type: String
 
 
 Conditions:
@@ -101,17 +126,181 @@ Mappings:
     sa-east-1:
       HostedZoneId: ZCMLWB8V5SYIT
 
+
 Resources:
 
-  ApiGatewayProdLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub /apig/${AWS::StackName}-prod
+  # CI/CD ######################################################################
 
-  ApiGatewayDevLogGroup:
+  LambdaCodeBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  CodePipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  LogGroupBuild:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /apig/${AWS::StackName}-dev
+      LogGroupName: !Sub /build/lambda/${AWS::StackName}
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Type: LINUX_CONTAINER
+        Image: !Ref CodeBuildDockerImage
+        EnvironmentVariables:
+          - Name: ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: LAMBDA_BUCKET
+            Value: !Ref LambdaReleaseBucketName
+      Name: !Sub ${AWS::StackName}-lambda-build
+      ServiceRole: !Ref CodeBuildServiceRole
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref LogGroupBuild
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/build/lambda/${AWS::StackName}:log-stream:*
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+              - Resource: !Sub arn:aws:s3:::${CodePipelineArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+              - Resource: !Sub arn:aws:s3:::${LambdaReleaseBucketName}/*
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - lambda:UpdateFunctionCode
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: codepipeline-access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: !GetAtt CodeBuildProject.Arn
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+              - Resource: !Sub arn:aws:s3:::${CodePipelineArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: 1
+                Provider: GitHub
+              Configuration:
+                Owner: !Ref GitHubUser
+                Repo: !Ref GitSourceRepo
+                Branch: !Ref GitBranch
+                OAuthToken: !Ref GitHubToken
+              OutputArtifacts:
+                - Name: App
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: App
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+
+  # API Gateway ################################################################
+
+  ApiGatewayV1LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /apig/${AWS::StackName}-v1
 
   ApiCloudWatchAccountRole:
     Type: AWS::IAM::Role
@@ -168,16 +357,16 @@ Resources:
       RestApiId: !Ref Api
     DependsOn: ApiPingMethod
 
-  ApiProdStage:
+  ApiV1Stage:
     Type: AWS::ApiGateway::Stage
     Properties:
       ClientCertificateId: !Ref ApiCertificate
       DeploymentId: !Ref ApiDeployment
       RestApiId: !Ref Api
-      StageName: p
-      TracingEnabled: false # TODO: Enable this
+      StageName: v1
+      TracingEnabled: false
       AccessLogSetting:
-        DestinationArn: !GetAtt ApiGatewayProdLogGroup.Arn
+        DestinationArn: !GetAtt ApiGatewayV1LogGroup.Arn
       MethodSettings:
         - HttpMethod: '*'
           DataTraceEnabled: true
@@ -185,28 +374,70 @@ Resources:
           LoggingLevel: INFO
           ResourcePath: /*
       Variables:
-        LambdaAlias: PROD
+        LambdaAlias: V1
     DependsOn: ApiAccount
 
-  ApiDevStage:
-    Type: AWS::ApiGateway::Stage
+  # Redirect Lambda ############################################################
+
+  ApiRedirectResource:
+    Type: AWS::ApiGateway::Resource
     Properties:
-      ClientCertificateId: !Ref ApiCertificate
-      DeploymentId: !Ref ApiDeployment
+      PathPart: redirect
       RestApiId: !Ref Api
-      StageName: d
-      TracingEnabled: false # TODO: Enable this
-      AccessLogSetting:
-        DestinationArn: !GetAtt ApiGatewayDevLogGroup.Arn
-      MethodSettings:
-        - HttpMethod: '*'
-          DataTraceEnabled: true
-          MetricsEnabled: true
-          LoggingLevel: INFO
-          ResourcePath: /*
-      Variables:
-        LambdaAlias: DEV
-    DependsOn: ApiAccount
+      ParentId: !GetAtt Api.RootResourceId
+
+  ApiRedirectMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref ApiRedirectResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      OperationName: GetRedirect
+      MethodResponses:
+        - StatusCode: 200
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        IntegrationResponses:
+          - StatusCode: 200
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${arn}:${!stageVariables.LambdaAlias}/invocations
+          - arn: !GetAtt RedirectLambda.Arn
+
+  RedirectLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref RedirectLambdaV1Alias
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/ping
+    DependsOn:
+      - ApiRedirectMethod
+      - ApiV1Stage
+
+  RedirectLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: !Ref LambdaReleaseBucketName
+        S3Key: redirect.zip
+      Description: !Sub ${AWS::StackName} Redirect
+      FunctionName: !Sub ${AWS::StackName}-redirect
+      Handler: app.handler
+      MemorySize: 128
+      Role: !GetAtt DefaultLambdaExecutionIamRole.Arn
+      Runtime: python3.7
+      Timeout: 60
+
+  RedirectLambdaV1Alias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref RedirectLambda
+      FunctionVersion: $LATEST
+      Name: V1
+
+  # Ping Lambda ################################################################
 
   ApiPingResource:
     Type: AWS::ApiGateway::Resource
@@ -234,27 +465,16 @@ Resources:
           - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${arn}:${!stageVariables.LambdaAlias}/invocations
           - arn: !GetAtt PingLambda.Arn
 
-  PingLambdaDevPermission:
+  PingLambdaPermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
-      FunctionName: !Ref PingLambdaDevAlias
+      FunctionName: !Ref PingLambdaV1Alias
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/ping
     DependsOn:
       - ApiPingMethod
-      - ApiDevStage
-
-  PingLambdaProdPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Ref PingLambdaProdAlias
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/ping
-    DependsOn:
-      - ApiPingMethod
-      - ApiProdStage
+      - ApiV1Stage
 
   PingLambda:
     Type: AWS::Lambda::Function
@@ -271,31 +491,20 @@ Resources:
       FunctionName: !Sub ${AWS::StackName}-ping
       Handler: index.handler
       MemorySize: 128
-      Role: !GetAtt PingLambdaExecutionIamRole.Arn
+      Role: !GetAtt DefaultLambdaExecutionIamRole.Arn
       Runtime: python3.7
       Timeout: 60
 
-  PingLambdaDevAlias:
+  PingLambdaV1Alias:
     Type: AWS::Lambda::Alias
     Properties:
       FunctionName: !Ref PingLambda
       FunctionVersion: $LATEST
-      Name: DEV
+      Name: V1
 
-  PingLambdaProdAlias:
-    Type: AWS::Lambda::Alias
-    Properties:
-      FunctionName: !Ref PingLambda
-      FunctionVersion: $LATEST
-      Name: PROD
+  # General Lambda  ############################################################
 
-  PingLambdaLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-ping
-      RetentionInDays: 90
-
-  PingLambdaExecutionIamRole:
+  DefaultLambdaExecutionIamRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -307,6 +516,8 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # Route 53 / DNS #############################################################
 
   # Edge deployment api gateway - https://docs.aws.amazon.com/general/latest/gr/rande.html
   Route53RecordEdge:
@@ -338,45 +549,45 @@ Outputs:
   ApiId:
     Value: !Ref Api
     Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-id
+      Name: !Sub ${AWS::StackName}-ApiId
 
   ApiRootResourceId:
     Value: !GetAtt Api.RootResourceId
     Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-root-resource-id
+      Name: !Sub ${AWS::StackName}-ApiRootResourceId
 
   ApiDeploymentId:
     Value: !Ref ApiDeployment
     Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-deployment-id
+      Name: !Sub ${AWS::StackName}-ApiDeploymentId
 
   PingLambdaName:
-    Value: !Sub ${AWS::StackName}-lambda-ping
+    Value: !Sub ${AWS::StackName}-PingLambdaName
     Export:
-      Name: !Sub ${AWS::StackName}-lambda-ping-name
+      Name: !Sub ${AWS::StackName}-PingLambdaName
 
   PingLambdaArn:
     Value: !GetAtt PingLambda.Arn
     Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-ping-lambda-arn
+      Name: !Sub ${AWS::StackName}-PingLambdaArn
 
-  ApiDevInvokeBareUrl:
-    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/d
+  ApiV1InvokeBareUrl:
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/v1
     Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-bare-url-dev
+      Name: !Sub ${AWS::StackName}-ApiV1InvokeBareUrl
 
-  ApiProdInvokeBareUrl:
-    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/p
+  ApiV1InvokeUrl:
+    Value: !Sub https://${DomainName}/v1
     Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-bare-url-prod
+      Name: !Sub ${AWS::StackName}-ApiV1InvokeUrl
 
-  ApiDevInvokeUrl:
-    Value: !Sub https://${DomainName}/d
+  CodePipelineArtifactBucketName:
+    Value: !Ref CodePipelineArtifactBucket
     Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-url-dev
+      Name: !Sub ${AWS::StackName}-CodePipelineArtifactBucketName
 
-  ApiProdInvokeUrl:
-    Value: !Sub https://${DomainName}/p
+  CodePipelineArtifactBucketArn:
+    Value: !GetAtt CodePipelineArtifactBucket.Arn
     Export:
-      Name: !Sub ${AWS::StackName}-api-gateway-url-prod
+      Name: !Sub ${AWS::StackName}-CodePipelineArtifactBucketArn
 
