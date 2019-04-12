@@ -1,9 +1,3 @@
 
-import requests
-
 def handler(event, context):
-    return {
-        'statusCode': 200,
-        'body': 'I want to redirect',
-    }
-}
+    return { 'statusCode': 200, 'location': 'https://aws.amazon.com' }
