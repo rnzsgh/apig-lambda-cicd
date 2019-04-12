@@ -3,5 +3,7 @@ import requests
 
 def handler(event, context):
     return {
-        'message' : 'Hello World'
+        'statusCode': 200,
+        'body': 'I want to redirect',
     }
+}
