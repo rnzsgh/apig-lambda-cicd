@@ -5,8 +5,6 @@ def handler(event, context):
     agent = event['headers']['User-Agent']
     print('ip: {} - agent: {}'.format(ip, agent))
 
-    print('This is an example of logging')
-
     return {
         'headers': { 'location': 'https://aws.amazon.com' },
         'statusCode': 302,
