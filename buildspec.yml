@@ -10,4 +10,4 @@ phases:
       ./build.sh $LAMBDA_BUCKET
   post_build:
     commands:
-      - uname -a
+      ./deploy.sh $LAMBDA_BUCKET $STACK_NAME
