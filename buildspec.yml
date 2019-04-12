@@ -6,8 +6,7 @@ phases:
       - VERSION="$(date +%Y-%m-%d.%H.%M.%S).$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | head -c 8)"
   build:
     commands:
-      - printenv
-      ./build.sh $LAMBDA_BUCKET
+      - ./build.sh $LAMBDA_BUCKET
   post_build:
     commands:
       ./deploy.sh $LAMBDA_BUCKET $STACK_NAME
