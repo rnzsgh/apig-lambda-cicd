@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Loop through the dirs/lambdas and update the function code.
+
 LAMBDA_BUCKET=$1
 STACK_NAME=$2
 

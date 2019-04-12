@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Loop through the dirs/lambdas, install the packages, zip and then
+# place in S3
+
 LAMBDA_BUCKET=$1
 
 for d in */ ; do
