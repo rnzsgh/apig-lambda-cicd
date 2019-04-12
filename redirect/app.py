@@ -7,4 +7,5 @@ def handler(event, context):
 
     return {
         'headers': { 'location': 'https://aws.amazon.com' },
+        'statusCode': 302,
     }
