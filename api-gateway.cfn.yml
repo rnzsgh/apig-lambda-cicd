@@ -450,7 +450,7 @@ Resources:
       MethodResponses:
         - StatusCode: 200
       Integration:
-        Type: AWS
+        Type: AWS_PROXY
         IntegrationHttpMethod: POST
         IntegrationResponses:
           - StatusCode: 200
@@ -477,7 +477,7 @@ Resources:
         S3Key: fish.zip
       Description: !Sub ${AWS::StackName} Fish
       FunctionName: !Sub ${AWS::StackName}-fish
-      Handler: index.handler
+      Handler: app.handler
       MemorySize: 128
       Role: !GetAtt DefaultLambdaExecutionIamRole.Arn
       Runtime: python3.7
