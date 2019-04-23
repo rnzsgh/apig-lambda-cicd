@@ -1,7 +1,6 @@
 import json,sympy
 
 def handler(event, context):
-
     return {
         'headers': {},
         'statusCode': 200,
